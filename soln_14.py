@@ -13,7 +13,7 @@ class Oracle:
         self.blocksize = keysize
         self.key = secrets.token_bytes(keysize)
         self.cipher = AES.new(self.key, AES.MODE_ECB)
-        prefix_size = secrets.randbelow(keysize)
+        prefix_size = secrets.randbelow(2 * keysize)
         self.prefix = secrets.token_bytes(prefix_size)
         self.suffix = decode_base64(
             "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkg"
@@ -31,53 +31,43 @@ class Oracle:
         full_ptxt = pad(full_ptxt, self.blocksize)
         return self.cipher.encrypt(full_ptxt)
 
-def get_padding_block(oracle: Oracle):
-    """
-    Encrypts increasingly large strings until an additional block
-    of padding is appended to the ciphertext. Then, returns the
-    encrypted block of padding.
-    """
-    test_str = b""
-    ctxt = oracle.enc(test_str)
-    last_size = len(ctxt)
-    next_size = last_size
-    while next_size == last_size:
-        test_str += b"A"
-        ctxt = oracle.enc(test_str)
-        next_size = len(ctxt)
-    block_size = next_size - last_size
-    return ctxt[-block_size:]
-
 def get_lengths(oracle: Oracle):
     """
-    Finds the size of the prefix by encrypting an increasingly large string
-    of padding bytes until the last block containing the prefix has been "filled"
-    and a block of padding can be found before the end of the ciphertext. Then,
-    finds the size of the appended target string by adding bytes until a block
-    of padding is added to the end of the ciphertext. Assumes that a block of
-    padding bytes does not exist in the prefix or the suffix.
+    Find block size by encrypting increasingly large strings. Compare ciphertexts
+    to find the block where the prefix ends and our input starts. Then encrypt
+    increasingly large strings until our input makes up two identical blocks of
+    ciphertext to find the prefix length. Subtract to find the length of the target.
     """
-    padding_block = get_padding_block(oracle)
-    block_size = len(padding_block)
-    test_str = b"\x10" * block_size
-    ctxt = oracle.enc(test_str)
-    msg_idx = ctxt.find(padding_block)
-    while msg_idx == -1 or msg_idx == len(ctxt) - block_size:
-        test_str += b"\x10"
-        ctxt = oracle.enc(test_str)
-        msg_idx = ctxt.find(padding_block)
-    prefix_fill = len(test_str) - block_size
-    prefix_length = msg_idx - prefix_fill
+    test_str = b""
+    base_size = len(oracle.enc(test_str))
+    next_size = base_size
+    while next_size == base_size:
+        test_str += b"A"
+        next_size = len(oracle.enc(test_str))
+    blocksize = next_size - base_size
 
-    padding_idx = ctxt.find(padding_block, msg_idx + block_size)
-    while padding_idx == -1:
-        test_str += b"\x10"
-        ctxt = oracle.enc(test_str)
-        padding_idx = ctxt.find(padding_block, msg_idx + block_size)
-    suffix_fill = len(test_str) - block_size - prefix_fill
-    suffix_length = len(ctxt) - msg_idx - 2 * block_size - suffix_fill
-    return prefix_length, suffix_length, block_size
+    ctxt_1 = oracle.enc(b"")
+    ctxt_2 = oracle.enc(b"A")
 
+    input_start_block = -1
+    for i in range(0, len(ctxt_2), blocksize):
+        if ctxt_1[i: i + blocksize] != ctxt_2[i: i + blocksize]:
+            input_start_block = i
+            break
+    
+    prefix_length = -1
+    for i in range(blocksize + 1):
+        fill = bytearray(b"A" * (2 * blocksize + i))
+        ctxt = oracle.enc(fill)
+        block1_start =  input_start_block + blocksize
+        block1 = ctxt[block1_start: block1_start + blocksize]
+        block2 = ctxt[block1_start + blocksize: block1_start + 2 * blocksize]
+        if block1 == block2:
+            prefix_length = block1_start - i
+            break
+    target_length = next_size - prefix_length - len(test_str) - blocksize
+    return prefix_length, target_length, blocksize
+    
 def create_dictionary_at(oracle: Oracle, blocksize: int, prefix_length: int, target_idx: int, known_target_prefix: bytes):
     """
     Given the known target plaintext up to a certain index, encrypts blocks containing
