@@ -32,3 +32,15 @@ def pad(msg: bytes, blocksize: int):
       return msg + bytes([blocksize] * blocksize)
   diff = blocksize - len(msg) % blocksize
   return msg + bytes([diff] * diff)
+
+def validate_padding(msg: bytes):
+  """Tests if the data is PKCS#7 padded."""
+  if not msg:
+    return False
+  expected_padding_amount = msg[-1]
+  if expected_padding_amount > len(msg):
+    return False
+  for i in range(len(msg) - 1, len(msg) - expected_padding_amount - 1, -1):
+    if msg[i] != expected_padding_amount:
+      return False
+  return True
